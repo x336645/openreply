@@ -17,6 +17,7 @@ import {
 import { buildReportUrl, generateReportShareSlug } from "@/lib/reports/share";
 import {
   canManageWorkspace,
+  getApiKeyWorkspaceContext,
   getCurrentWorkspaceContext,
 } from "@/lib/workspace-access";
 
@@ -285,7 +286,11 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const context = await getCurrentWorkspaceContext();
+  // API key auth first (for the owner's AI assistant), then session auth.
+  const apiKey = request.headers.get("x-api-key");
+  const context =
+    (await getApiKeyWorkspaceContext(apiKey)) ??
+    (await getCurrentWorkspaceContext());
   if (!context) {
     return NextResponse.json(
       { success: false, error: "Unauthorized" },
