@@ -31,6 +31,35 @@ export function canManageBilling(role: WorkspaceRole) {
   return role === "OWNER";
 }
 
+/**
+ * API key auth for automation (e.g. the owner's AI assistant).
+ * If `OPENREPLY_API_KEY` is set and the provided key matches,
+ * returns an OWNER context for the first workspace.
+ */
+export async function getApiKeyWorkspaceContext(
+  apiKey: string | null
+): Promise<WorkspaceContext | null> {
+  const expected = process.env.OPENREPLY_API_KEY;
+  if (!expected || !apiKey || apiKey !== expected) return null;
+
+  const workspace = await prisma.workspace.findFirst({
+    orderBy: { createdAt: "asc" },
+  });
+  if (!workspace) return null;
+
+  const ownerMembership = await prisma.workspaceMember.findFirst({
+    where: { workspaceId: workspace.id, role: "OWNER" },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return {
+    userId: ownerMembership?.userId ?? "api-key",
+    workspaceId: workspace.id,
+    workspace,
+    role: "OWNER",
+  };
+}
+
 export async function getCurrentWorkspaceContext(): Promise<WorkspaceContext | null> {
   const userId = await getCurrentUserId();
   if (!userId) return null;
@@ -71,4 +100,3 @@ export async function getCurrentWorkspaceContext(): Promise<WorkspaceContext | n
     role: createdMembership?.role ?? "OWNER",
   };
 }
-
