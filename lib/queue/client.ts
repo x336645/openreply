@@ -77,15 +77,24 @@ export interface ProcessMessageJob {
   senderId: string;
 }
 
+// A DM broadcast to a contact segment. The job carries only the broadcast
+// id; the recipients live in BroadcastDelivery rows, so a retried job
+// resumes from the still-PENDING rows instead of resending to everyone.
+export interface ProcessBroadcastJob {
+  broadcastId: string;
+}
+
 export type DmQueueJob =
   | ProcessCommentJob
   | ProcessPostbackJob
   | ProcessFollowUpJob
-  | ProcessMessageJob;
+  | ProcessMessageJob
+  | ProcessBroadcastJob;
 
 export const POSTBACK_JOB_NAME = "process-postback";
 export const FOLLOWUP_JOB_NAME = "process-followup";
 export const MESSAGE_JOB_NAME = "process-message";
+export const BROADCAST_JOB_NAME = "process-broadcast";
 
 let dmQueue: Queue<DmQueueJob> | null = null;
 

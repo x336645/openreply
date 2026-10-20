@@ -10,15 +10,18 @@ import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   getDMQueue,
   getRedisConnection,
+  BROADCAST_JOB_NAME,
   MESSAGE_JOB_NAME,
   POSTBACK_JOB_NAME,
   FOLLOWUP_JOB_NAME,
   type DmQueueJob,
+  type ProcessBroadcastJob,
   type ProcessCommentJob,
   type ProcessMessageJob,
   type ProcessPostbackJob,
   type ProcessFollowUpJob,
 } from "./client";
+import { processBroadcast } from "@/lib/broadcast/broadcast";
 import { prisma } from "@/lib/db/client";
 import { captureContact } from "@/lib/crm/contacts";
 import {
@@ -278,7 +281,10 @@ async function sendRevealDirectMessage({
 
 
 function connectionScope(data: DmQueueJob) {
-  return data.accountConnectionId ? { instagramAccountId: data.accountConnectionId } : {};
+  // Broadcast jobs carry no account connection; they scope by broadcast id.
+  const accountConnectionId =
+    "accountConnectionId" in data ? data.accountConnectionId : undefined;
+  return accountConnectionId ? { instagramAccountId: accountConnectionId } : {};
 }
 
 async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
@@ -1585,6 +1591,10 @@ async function dispatchJob(job: Job<DmQueueJob>): Promise<void> {
   if (job.name === MESSAGE_JOB_NAME) {
     return processMessage(job as Job<ProcessMessageJob>);
   }
+  if (job.name === BROADCAST_JOB_NAME) {
+    const { broadcastId } = (job as Job<ProcessBroadcastJob>).data;
+    return processBroadcast(broadcastId);
+  }
   return processComment(job as Job<ProcessCommentJob>);
 }
 
@@ -1606,7 +1616,10 @@ async function recordWorkerFailure(
   error: Error
 ) {
   try {
-    const instagramAccountId = job?.data.instagramAccountId;
+    const instagramAccountId =
+      job && "instagramAccountId" in job.data
+        ? job.data.instagramAccountId
+        : undefined;
     const commentId =
       job && "commentId" in job.data ? job.data.commentId : null;
     const account = instagramAccountId

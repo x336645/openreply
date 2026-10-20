@@ -78,10 +78,13 @@ describe("MCP automations server", () => {
     expect(names).toEqual([
       "automation_stats",
       "create_automation",
+      "create_broadcast",
       "delete_automation",
       "get_automation",
+      "get_broadcast",
       "get_contact",
       "list_automations",
+      "list_broadcasts",
       "list_contacts",
       "list_pending_messages",
       "mark_message_handled",

@@ -22,6 +22,7 @@ import {
 } from "@/lib/campaigns/links";
 import { generateReportShareSlug } from "@/lib/reports/share";
 import { sendInboxDmReply } from "@/lib/inbox/messages";
+import { createBroadcast } from "@/lib/broadcast/broadcast";
 import {
   canManageWorkspace,
   getApiKeyWorkspaceContext,
@@ -581,6 +582,122 @@ export function buildServer(ctx: WorkspaceContext) {
         select: { id: true, status: true },
       });
       return ok(updated);
+    }
+  );
+
+  server.registerTool(
+    "create_broadcast",
+    {
+      description:
+        "Create a DM broadcast to a segment of CRM contacts: every contact of the account, or only contacts carrying targetTag. Recipients are snapshotted at creation and the send runs asynchronously on the worker queue; poll get_broadcast for progress. Contacts outside Instagram's 24h messaging window will fail their delivery (counted in failedCount).",
+      inputSchema: {
+        name: z.string().min(1).max(100).describe("Broadcast name"),
+        instagramAccountId: z
+          .string()
+          .describe("Internal Instagram account ID to send from"),
+        message: z.string().min(1).max(1000).describe("DM text to broadcast"),
+        targetTag: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Only contacts carrying this tag (omit for all contacts)"),
+      },
+    },
+    async ({ name, instagramAccountId, message, targetTag }) => {
+      try {
+        const result = await createBroadcast({
+          workspaceId,
+          instagramAccountId,
+          name,
+          message,
+          targetTag: targetTag ?? null,
+        });
+        return ok(result);
+      } catch (error) {
+        return fail(
+          error instanceof Error ? error.message : "Failed to create broadcast"
+        );
+      }
+    }
+  );
+
+  server.registerTool(
+    "get_broadcast",
+    {
+      description:
+        "Get one broadcast's status and counters, plus a delivery breakdown and the most recent failure reasons.",
+      inputSchema: {
+        id: z.string().describe("Broadcast ID"),
+      },
+    },
+    async ({ id }) => {
+      const broadcast = await prisma.broadcast.findFirst({
+        where: { id, workspaceId },
+        include: {
+          instagramAccount: { select: { username: true } },
+        },
+      });
+      if (!broadcast) return fail("Broadcast not found");
+
+      const [statusRows, recentFailures] = await Promise.all([
+        prisma.broadcastDelivery.groupBy({
+          by: ["status"],
+          where: { broadcastId: id },
+          _count: { _all: true },
+        }),
+        prisma.broadcastDelivery.findMany({
+          where: { broadcastId: id, status: "FAILED" },
+          select: {
+            errorMessage: true,
+            contact: { select: { igUserId: true, username: true } },
+          },
+          orderBy: { updatedAt: "desc" },
+          take: 10,
+        }),
+      ]);
+      const deliveries = Object.fromEntries(
+        statusRows.map((r) => [r.status, r._count._all])
+      );
+
+      return ok({ broadcast, deliveries, recentFailures });
+    }
+  );
+
+  server.registerTool(
+    "list_broadcasts",
+    {
+      description:
+        "List recent DM broadcasts in this workspace, newest first, with status and sent/failed counters.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Max broadcasts to return (default 20)"),
+      },
+    },
+    async ({ limit }) => {
+      const broadcasts = await prisma.broadcast.findMany({
+        where: { workspaceId },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          targetTag: true,
+          totalCount: true,
+          sentCount: true,
+          failedCount: true,
+          instagramAccountId: true,
+          createdAt: true,
+          completedAt: true,
+          instagramAccount: { select: { username: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: limit ?? 20,
+      });
+      return ok({ broadcasts });
     }
   );
 

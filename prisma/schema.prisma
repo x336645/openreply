@@ -83,6 +83,7 @@ model Workspace {
   dmLogs            DmLog[]
   contacts          Contact[]
   inboxMessages     InboxMessage[]
+  broadcasts        Broadcast[]
   trackedLinks      TrackedLink[]
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
@@ -146,6 +147,7 @@ model InstagramAccount {
   dmLogs      DmLog[]
   contacts    Contact[]
   inboxMessages InboxMessage[]
+  broadcasts  Broadcast[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
 
@@ -288,6 +290,7 @@ model Contact {
   workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
   sourceAutomation Automation?      @relation("ContactSourceAutomation", fields: [sourceAutomationId], references: [id], onDelete: SetNull)
+  broadcastDeliveries BroadcastDelivery[]
 
   @@unique([instagramAccountId, igUserId])
   @@index([workspaceId])
@@ -334,6 +337,77 @@ enum InboxMessageStatus {
   AUTO_REPLIED
   REPLIED
   IGNORED
+}
+
+/// One DM broadcast to a segment of CRM contacts: every contact of an
+/// account, or only those carrying `targetTag`. Created via MCP; delivery
+/// runs as a dm-processing queue job that walks BroadcastDelivery rows one
+/// by one, so a crashed or retried job resumes from the still-PENDING rows
+/// instead of resending to everyone.
+model Broadcast {
+  id                 String          @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String
+
+  name        String
+  message     String
+  /// Null broadcasts to every contact of the account.
+  targetTag   String?
+  status      BroadcastStatus @default(DRAFT)
+  totalCount  Int             @default(0)
+  sentCount   Int             @default(0)
+  failedCount Int             @default(0)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount    @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  deliveries       BroadcastDelivery[]
+
+  @@index([workspaceId])
+  @@index([workspaceId, createdAt])
+  @@index([instagramAccountId])
+}
+
+/// One recipient of a broadcast. The (broadcastId, contactId) unique pair is
+/// what makes the send loop idempotent: a row leaves PENDING exactly once,
+/// whether it ends SENT, FAILED or SKIPPED.
+model BroadcastDelivery {
+  id          String                  @id @default(cuid())
+  broadcastId String
+  contactId   String
+
+  status       BroadcastDeliveryStatus @default(PENDING)
+  errorMessage String?
+  sentAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  broadcast Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([broadcastId, contactId])
+  @@index([broadcastId, status])
+  @@index([contactId])
+}
+
+enum BroadcastStatus {
+  DRAFT
+  QUEUED
+  SENDING
+  DONE
+  FAILED
+}
+
+enum BroadcastDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
 }
 
 // Legacy reconciliation model; currently unwired. Runtime code does not read
