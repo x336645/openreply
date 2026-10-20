@@ -82,6 +82,7 @@ model Workspace {
   automations       Automation[]
   dmLogs            DmLog[]
   contacts          Contact[]
+  inboxMessages     InboxMessage[]
   trackedLinks      TrackedLink[]
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
@@ -144,6 +145,7 @@ model InstagramAccount {
   automations Automation[]
   dmLogs      DmLog[]
   contacts    Contact[]
+  inboxMessages InboxMessage[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
 
@@ -290,6 +292,48 @@ model Contact {
   @@unique([instagramAccountId, igUserId])
   @@index([workspaceId])
   @@index([workspaceId, lastSeenAt])
+}
+
+/// One row per incoming DM, archived from the message webhook flow so an
+/// external agent (via MCP) can read whatever no campaign handled and reply
+/// to it. Messages a dmTrigger campaign already answered are stored as
+/// AUTO_REPLIED; the rest stay PENDING until an agent replies
+/// (send_dm_reply), marks them handled, or dismisses them.
+model InboxMessage {
+  id                 String             @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String
+
+  /// The sender's Instagram user id (IGSID).
+  senderId       String
+  senderUsername String?
+  text           String
+  /// The webhook's message id. Unique so a redelivered webhook never
+  /// archives the same DM twice.
+  externalMessageId String          @unique
+  receivedAt        DateTime        @default(now())
+  status            InboxMessageStatus @default(PENDING)
+  /// The reply an agent sent via MCP (send_dm_reply), when it replied to
+  /// this stored message.
+  replyText         String?
+  repliedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([workspaceId, status, receivedAt])
+  @@index([instagramAccountId, senderId])
+}
+
+enum InboxMessageStatus {
+  PENDING
+  AUTO_REPLIED
+  REPLIED
+  IGNORED
 }
 
 // Legacy reconciliation model; currently unwired. Runtime code does not read

@@ -21,6 +21,7 @@ import {
   syncCampaignLinks,
 } from "@/lib/campaigns/links";
 import { generateReportShareSlug } from "@/lib/reports/share";
+import { sendInboxDmReply } from "@/lib/inbox/messages";
 import {
   canManageWorkspace,
   getApiKeyWorkspaceContext,
@@ -475,6 +476,111 @@ export function buildServer(ctx: WorkspaceContext) {
         contact,
         interactions: { total: totalInteractions, byStatus },
       });
+    }
+  );
+
+  server.registerTool(
+    "list_pending_messages",
+    {
+      description:
+        "List incoming Instagram DMs in this workspace that no campaign has handled yet (inbox status PENDING), newest first. Read these, draft replies, then answer with send_dm_reply or dismiss with mark_message_handled.",
+      inputSchema: {
+        instagramAccountId: z
+          .string()
+          .optional()
+          .describe("Only messages for this Instagram account (internal account ID)"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Max messages to return (default 50)"),
+      },
+    },
+    async ({ instagramAccountId, limit }) => {
+      const messages = await prisma.inboxMessage.findMany({
+        where: {
+          workspaceId,
+          status: "PENDING",
+          ...(instagramAccountId ? { instagramAccountId } : {}),
+        },
+        select: {
+          id: true,
+          senderId: true,
+          senderUsername: true,
+          text: true,
+          receivedAt: true,
+          instagramAccountId: true,
+          instagramAccount: { select: { username: true } },
+        },
+        orderBy: { receivedAt: "desc" },
+        take: limit ?? 50,
+      });
+      return ok({ messages });
+    }
+  );
+
+  server.registerTool(
+    "send_dm_reply",
+    {
+      description:
+        "Send a DM reply to an Instagram user from one of this workspace's accounts, via the same provider send path the automation worker uses. Afterwards the sender's latest pending inbox message is marked REPLIED with this text.",
+      inputSchema: {
+        instagramAccountId: z
+          .string()
+          .describe("Internal Instagram account ID to send from"),
+        recipientIgUserId: z
+          .string()
+          .describe("Recipient's Instagram user ID (IGSID)"),
+        text: z.string().min(1).max(1000).describe("Reply text"),
+      },
+    },
+    async ({ instagramAccountId, recipientIgUserId, text }) => {
+      try {
+        const result = await sendInboxDmReply({
+          workspaceId,
+          instagramAccountId,
+          recipientIgUserId,
+          text,
+        });
+        return ok(result);
+      } catch (error) {
+        return fail(
+          error instanceof Error ? error.message : "Failed to send DM reply"
+        );
+      }
+    }
+  );
+
+  server.registerTool(
+    "mark_message_handled",
+    {
+      description:
+        "Mark an inbox message as handled without sending a reply: REPLIED when it was answered elsewhere, IGNORED to dismiss it.",
+      inputSchema: {
+        id: z.string().describe("Inbox message ID"),
+        status: z
+          .enum(["REPLIED", "IGNORED"])
+          .describe("New status for the message"),
+      },
+    },
+    async ({ id, status }) => {
+      const existing = await prisma.inboxMessage.findFirst({
+        where: { id, workspaceId },
+        select: { id: true },
+      });
+      if (!existing) return fail("Inbox message not found");
+
+      const updated = await prisma.inboxMessage.update({
+        where: { id },
+        data: {
+          status,
+          ...(status === "REPLIED" ? { repliedAt: new Date() } : {}),
+        },
+        select: { id: true, status: true },
+      });
+      return ok(updated);
     }
   );
 

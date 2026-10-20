@@ -83,6 +83,9 @@ describe("MCP automations server", () => {
       "get_contact",
       "list_automations",
       "list_contacts",
+      "list_pending_messages",
+      "mark_message_handled",
+      "send_dm_reply",
       "update_automation",
     ]);
 

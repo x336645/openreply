@@ -22,6 +22,10 @@ import {
 import { prisma } from "@/lib/db/client";
 import { captureContact } from "@/lib/crm/contacts";
 import {
+  markIncomingMessageAutoReplied,
+  recordIncomingMessage,
+} from "@/lib/inbox/messages";
+import {
   MetaApiError,
   RateLimitError,
   TokenExpiredError,
@@ -1290,6 +1294,16 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   const { instagramAccountId, messageId, messageText, senderId } = job.data;
 
+  // Inbox: archive every incoming DM so an external agent (via MCP) can pick
+  // up whatever no campaign handles. Best-effort; never blocks the flow below.
+  await recordIncomingMessage({
+    instagramId: instagramAccountId,
+    accountConnectionId: job.data.accountConnectionId,
+    senderId,
+    text: messageText,
+    externalMessageId: messageId,
+  });
+
   const automations = await prisma.automation.findMany({
     where: {
       ...connectionScope(job.data),
@@ -1309,6 +1323,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   });
 
   const dedupeId = `dm:${messageId}`;
+  let autoReplied = false;
 
   for (const automation of automations) {
     const matchResult = automation.matchAnyWord
@@ -1521,6 +1536,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
           errorMessage: null,
         },
       });
+      autoReplied = true;
     } catch (error) {
       await releaseWorkspaceDMReservation(
         automation.workspaceId,
@@ -1550,6 +1566,12 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
       });
       throw error;
     }
+  }
+
+  // A campaign answered this DM, so the archived copy is handled — it must
+  // not surface as pending work for an external agent. Best-effort.
+  if (autoReplied) {
+    await markIncomingMessageAutoReplied(messageId);
   }
 }
 
