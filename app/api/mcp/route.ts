@@ -225,6 +225,7 @@ export function buildServer(ctx: WorkspaceContext) {
           keywords: matchAnyWord ? [] : data.keywords,
           matchAnyWord,
           dmTriggerEnabled: data.dmTriggerEnabled,
+          storyTriggerEnabled: data.storyTriggerEnabled,
           dmMessage: data.dmMessage,
           openingDmEnabled,
           openingDmMessage: openingDmEnabled

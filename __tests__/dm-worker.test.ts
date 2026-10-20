@@ -95,6 +95,19 @@ vi.mock("@/lib/meta/oauth", () => ({
 
 vi.mock("@/lib/utils/keyword-matcher", () => ({
   matchKeywords: mockMatchKeywords,
+  // Mirror the real helper's semantics on top of the mocked matchKeywords,
+  // so DM/story trigger tests keep asserting against mockMatchKeywords.
+  matchInboundTrigger: (input: {
+    text?: string | null;
+    keywords: string[];
+    matchAnyWord: boolean;
+    wholeWordMatch: boolean;
+  }) =>
+    input.matchAnyWord
+      ? { matched: true, matchedKeyword: null }
+      : !input.text?.trim()
+        ? { matched: false, matchedKeyword: null }
+        : mockMatchKeywords(input.text, input.keywords, input.wholeWordMatch),
 }));
 
 vi.mock("@/lib/utils/rate-limiter", () => ({
@@ -119,6 +132,7 @@ vi.mock("@/lib/queue/client", () => ({
   POSTBACK_JOB_NAME: "process-postback",
   FOLLOWUP_JOB_NAME: "process-followup",
   MESSAGE_JOB_NAME: "process-message",
+  STORY_JOB_NAME: "process-story",
   BROADCAST_JOB_NAME: "process-broadcast",
 }));
 
@@ -1179,6 +1193,90 @@ describe("DM Worker — DM keyword trigger", () => {
         create: expect.objectContaining({ status: "FAILED" }),
       })
     );
+  });
+});
+
+describe("DM Worker — Story trigger", () => {
+  const storyTriggerAutomation = {
+    ...mockAutomation,
+    storyTriggerEnabled: true,
+    requireFollow: false,
+    followPromptMessage: null,
+    followPromptButtonLabel: null,
+  };
+
+  function createMockStoryJob(data: Record<string, unknown> = {}) {
+    return {
+      name: "process-story",
+      data: {
+        instagramAccountId: "ig_456",
+        messageId: "mid_story_1",
+        kind: "story_reply",
+        messageText: "can I get the LINK?",
+        senderId: "commenter_999",
+        storyId: "story_77",
+        ...data,
+      },
+      id: "story_job_001",
+      attemptsMade: 0,
+    };
+  }
+
+  beforeEach(() => {
+    mockPrisma.automation.findMany.mockResolvedValue([storyTriggerAutomation]);
+  });
+
+  it("replies to a story reply whose text matches, logging against the story dedupe id", async () => {
+    const processor = getProcessor();
+    await processor(createMockStoryJob());
+
+    expect(mockPrisma.automation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          storyTriggerEnabled: true,
+          isActive: true,
+        }),
+      })
+    );
+    expect(mockSendDirectMessage).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "commenter_999",
+      "Hey commenter_user! Here is the link: https://example.com"
+    );
+    expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          automationId_commentId: {
+            automationId: "auto_789",
+            commentId: "story:mid_story_1",
+          },
+        },
+      })
+    );
+  });
+
+  it("fires a matchAnyWord campaign on a text-less story mention", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      { ...storyTriggerAutomation, matchAnyWord: true, keywords: [] },
+    ]);
+
+    const processor = getProcessor();
+    await processor(
+      createMockStoryJob({ kind: "story_mention", messageText: undefined })
+    );
+
+    expect(mockSendDirectMessage).toHaveBeenCalled();
+  });
+
+  it("does not fire a keyword campaign on a text-less story mention", async () => {
+    const processor = getProcessor();
+    await processor(
+      createMockStoryJob({ kind: "story_mention", messageText: undefined })
+    );
+
+    expect(mockMatchKeywords).not.toHaveBeenCalled();
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
   });
 });
 

@@ -14,12 +14,14 @@ import {
   MESSAGE_JOB_NAME,
   POSTBACK_JOB_NAME,
   FOLLOWUP_JOB_NAME,
+  STORY_JOB_NAME,
   type DmQueueJob,
   type ProcessBroadcastJob,
   type ProcessCommentJob,
   type ProcessMessageJob,
   type ProcessPostbackJob,
   type ProcessFollowUpJob,
+  type ProcessStoryJob,
 } from "./client";
 import { processBroadcast } from "@/lib/broadcast/broadcast";
 import { prisma } from "@/lib/db/client";
@@ -46,7 +48,10 @@ import {
   hasInstagramCredentials,
   type InstagramContext,
 } from "@/lib/instagram/provider";
-import { matchKeywords } from "@/lib/utils/keyword-matcher";
+import {
+  matchInboundTrigger,
+  matchKeywords,
+} from "@/lib/utils/keyword-matcher";
 import { reserveDMSlot, releaseDMSlot } from "@/lib/utils/rate-limiter";
 import {
   releaseWorkspaceDMReservation,
@@ -1297,23 +1302,55 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
  * comments) and delivers the reveal directly, honouring the follow gate.
  * Dedup is per inbound message id, so each message triggers at most one reply.
  */
-async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
-  const { instagramAccountId, messageId, messageText, senderId } = job.data;
+interface InboundTriggerSpec {
+  /** Which campaign flag gates this trigger. */
+  triggerField: "dmTriggerEnabled" | "storyTriggerEnabled";
+  /** DmLog dedupe prefix ("dm" for DMs, "story" for story events). */
+  dedupePrefix: string;
+  /** Label handed to the reveal sender for log context. */
+  contextLabel: string;
+  /** Inbox source to record; undefined keeps the plain-DM default. */
+  inboxSource?: string;
+}
+
+/**
+ * Shared flow for inbound DM-shaped triggers. A story interaction differs
+ * from a DM only in which campaign flag gates it, the DmLog dedupe prefix,
+ * and how the inbox archive is sourced — keyword matching, the follow gate,
+ * plan limits, and the send itself are the DM flow, unchanged.
+ *
+ * DmLog has no story-specific columns, so a story trigger reuses them:
+ * commentId holds `story:<story message id>` and commentText the story
+ * reply's text (empty for a mention, which carries none).
+ */
+async function processInboundTrigger(
+  job: Job<ProcessMessageJob | ProcessStoryJob>,
+  data: ProcessMessageJob | ProcessStoryJob,
+  spec: InboundTriggerSpec
+): Promise<void> {
+  const { instagramAccountId, messageId, senderId } = data;
+  const messageText = data.messageText ?? "";
 
   // Inbox: archive every incoming DM so an external agent (via MCP) can pick
   // up whatever no campaign handles. Best-effort; never blocks the flow below.
   await recordIncomingMessage({
     instagramId: instagramAccountId,
-    accountConnectionId: job.data.accountConnectionId,
+    accountConnectionId: data.accountConnectionId,
     senderId,
     text: messageText,
     externalMessageId: messageId,
+    source: spec.inboxSource,
   });
+
+  const triggerWhere =
+    spec.triggerField === "dmTriggerEnabled"
+      ? { dmTriggerEnabled: true }
+      : { storyTriggerEnabled: true };
 
   const automations = await prisma.automation.findMany({
     where: {
-      ...connectionScope(job.data),
-      dmTriggerEnabled: true,
+      ...connectionScope(data),
+      ...triggerWhere,
       isActive: true,
       instagramAccount: { instagramId: instagramAccountId },
     },
@@ -1328,17 +1365,16 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     orderBy: { createdAt: "asc" },
   });
 
-  const dedupeId = `dm:${messageId}`;
+  const dedupeId = `${spec.dedupePrefix}:${messageId}`;
   let autoReplied = false;
 
   for (const automation of automations) {
-    const matchResult = automation.matchAnyWord
-      ? { matched: true, matchedKeyword: null }
-      : matchKeywords(
-          messageText,
-          automation.keywords,
-          automation.wholeWordMatch
-        );
+    const matchResult = matchInboundTrigger({
+      text: data.messageText,
+      keywords: automation.keywords,
+      matchAnyWord: automation.matchAnyWord,
+      wholeWordMatch: automation.wholeWordMatch,
+    });
 
     if (!matchResult.matched) continue;
 
@@ -1499,7 +1535,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
           automation: automation,
           userId: senderId,
           commenterName: commenterName,
-          context: "message trigger",
+          context: spec.contextLabel,
         });
 
         // The link has been delivered, so the appreciation follow-up applies
@@ -1581,6 +1617,24 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   }
 }
 
+async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
+  return processInboundTrigger(job, job.data, {
+    triggerField: "dmTriggerEnabled",
+    dedupePrefix: "dm",
+    contextLabel: "message trigger",
+  });
+}
+
+async function processStory(job: Job<ProcessStoryJob>): Promise<void> {
+  return processInboundTrigger(job, job.data, {
+    triggerField: "storyTriggerEnabled",
+    dedupePrefix: "story",
+    contextLabel: "story trigger",
+    inboxSource:
+      job.data.kind === "story_mention" ? "STORY_MENTION" : "STORY_REPLY",
+  });
+}
+
 async function dispatchJob(job: Job<DmQueueJob>): Promise<void> {
   if (job.name === POSTBACK_JOB_NAME) {
     return processPostback(job as Job<ProcessPostbackJob>);
@@ -1590,6 +1644,9 @@ async function dispatchJob(job: Job<DmQueueJob>): Promise<void> {
   }
   if (job.name === MESSAGE_JOB_NAME) {
     return processMessage(job as Job<ProcessMessageJob>);
+  }
+  if (job.name === STORY_JOB_NAME) {
+    return processStory(job as Job<ProcessStoryJob>);
   }
   if (job.name === BROADCAST_JOB_NAME) {
     const { broadcastId } = (job as Job<ProcessBroadcastJob>).data;

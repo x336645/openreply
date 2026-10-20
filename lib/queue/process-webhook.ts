@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db/client';
 import { captureContact } from '@/lib/crm/contacts';
-import { getDMQueue, MESSAGE_JOB_NAME, POSTBACK_JOB_NAME } from '@/lib/queue/client';
-import { parseCommentEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents } from '@/lib/meta/webhook';
+import { getDMQueue, MESSAGE_JOB_NAME, POSTBACK_JOB_NAME, STORY_JOB_NAME } from '@/lib/queue/client';
+import { parseCommentEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents, parseStoryEvents } from '@/lib/meta/webhook';
 import { Prisma, type InstagramProvider } from '@/app/generated/prisma/client';
 
 const OPENING_DM_READ_FALLBACK_DELAY_MS = 5 * 60 * 1000;
@@ -144,6 +144,45 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
           data: { workspaceId: account.workspaceId },
         });
       }
+    }
+
+    // Story replies and story mentions → story-triggered autoreply. A story
+    // reply with text also flows through the message loop above (it is a DM;
+    // that behaviour is unchanged) — this loop is what lets
+    // storyTriggerEnabled campaigns match it as a story event, and it is the
+    // only path a text-less story mention can take.
+    const storyEvents = parseStoryEvents(
+      payload as Parameters<typeof parseStoryEvents>[0]
+    );
+
+    for (const event of storyEvents) {
+      const account = accountMap.get(event.instagramAccountId);
+      if (!account) continue;
+
+      await queue.add(
+        STORY_JOB_NAME,
+        {
+          instagramAccountId: event.instagramAccountId,
+          accountConnectionId: accountMap.get(event.instagramAccountId)?.id,
+          messageId: event.messageId,
+          kind: event.kind,
+          messageText: event.text,
+          senderId: event.senderId,
+          storyId: event.storyId,
+        },
+        {
+          jobId: `story_${event.instagramAccountId}_${Buffer.from(
+            event.messageId
+          ).toString("base64url")}`,
+        }
+      );
+
+      // CRM: record the sender, same as the DM flow.
+      await captureContact({
+        workspaceId: account.workspaceId,
+        instagramAccountId: account.id,
+        igUserId: event.senderId,
+      });
     }
 
     // If a user reads the opening DM and never taps the button, deliver the

@@ -15,6 +15,12 @@ export interface RecordIncomingMessageInput {
   text: string;
   /** The webhook's message id; dedupe key. */
   externalMessageId: string;
+  /**
+   * How the message arrived ("DM" | "STORY_REPLY" | "STORY_MENTION").
+   * Defaults to "DM". A story-sourced archive is the more specific record,
+   * so when one is provided it also wins on redelivery updates.
+   */
+  source?: string;
 }
 
 /**
@@ -25,8 +31,14 @@ export interface RecordIncomingMessageInput {
 export async function recordIncomingMessage(
   input: RecordIncomingMessageInput
 ): Promise<void> {
-  const { instagramId, accountConnectionId, senderId, text, externalMessageId } =
-    input;
+  const {
+    instagramId,
+    accountConnectionId,
+    senderId,
+    text,
+    externalMessageId,
+    source,
+  } = input;
   if (!instagramId || !senderId || !externalMessageId) return;
 
   try {
@@ -59,10 +71,13 @@ export async function recordIncomingMessage(
         senderUsername: contact?.username ?? null,
         text,
         externalMessageId,
+        source: source ?? "DM",
         status: "PENDING",
       },
-      // Already archived (webhook redelivery): leave the row untouched.
-      update: {},
+      // Already archived (webhook redelivery): leave the row untouched,
+      // except that a story-sourced pass records the more specific source
+      // (a story reply is archived by both the DM and story flows).
+      update: source ? { source } : {},
     });
   } catch (error) {
     console.error("[Inbox] Failed to archive incoming message:", error);

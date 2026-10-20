@@ -82,7 +82,16 @@ interface WebhookEntry {
       is_echo?: boolean;
       is_deleted?: boolean;
       is_unsupported?: boolean;
-      attachments?: Array<{ type?: string }>;
+      // Present when the message is a reply to one of the account's stories
+      // (Meta: message.reply_to.story carries the story's media id/url).
+      reply_to?: {
+        mid?: string;
+        story?: { id?: string; url?: string };
+      };
+      attachments?: Array<{
+        type?: string;
+        payload?: { url?: string };
+      }>;
     };
   }>;
 }
@@ -92,6 +101,18 @@ export interface WebhookMessageEvent {
   messageId: string;
   messageText: string;
   senderId: string;
+}
+
+export interface WebhookStoryEvent {
+  instagramAccountId: string;
+  /** The webhook message id of the story reply / mention (dedupe key). */
+  messageId: string;
+  senderId: string;
+  kind: "story_reply" | "story_mention";
+  /** Reply text; a mention carries none, so this is undefined there. */
+  text?: string;
+  /** The story media id, when the payload carries one. */
+  storyId?: string;
 }
 
 export interface WebhookPostbackEvent {
@@ -265,6 +286,69 @@ export function parseReadEvents(payload: WebhookPayload): WebhookReadEvent[] {
         userId,
         watermark: messaging.read.watermark,
       });
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Parse story interactions out of a webhook payload. Meta delivers both as
+ * ordinary messaging items, distinguished from plain DMs by their shape:
+ *
+ * - Story reply: the message carries `reply_to.story` (the story it answers).
+ *   It usually also has text, which is keyword-matched like a DM.
+ * - Story mention: someone mentioned the account in their own story; the
+ *   message carries a `story_mention` attachment and no text.
+ *
+ * Story replies with text ALSO surface through parseMessageEvents (they are
+ * DMs, and existing dmTrigger behaviour must not change); this parser exists
+ * so storyTriggerEnabled campaigns can match them as story events.
+ */
+export function parseStoryEvents(payload: WebhookPayload): WebhookStoryEvent[] {
+  const events: WebhookStoryEvent[] = [];
+
+  if (payload.object !== "instagram") return events;
+
+  for (const entry of payload.entry ?? []) {
+    for (const messaging of entry.messaging ?? []) {
+      const message = messaging.message;
+      if (!message) continue;
+      if (message.is_echo || message.is_deleted || message.is_unsupported) {
+        continue;
+      }
+
+      const messageId = message.mid;
+      const senderId = messaging.sender?.id;
+      const accountId = entry.id ?? messaging.recipient?.id;
+      if (!messageId || !senderId || !accountId) continue;
+      // Ignore anything the connected account sent to itself.
+      if (senderId === accountId) continue;
+
+      const story = message.reply_to?.story;
+      if (story) {
+        events.push({
+          instagramAccountId: accountId,
+          messageId,
+          senderId,
+          kind: "story_reply",
+          text: message.text?.trim() ? message.text : undefined,
+          storyId: story.id,
+        });
+        continue;
+      }
+
+      const mention = (message.attachments ?? []).find(
+        (attachment) => attachment.type === "story_mention"
+      );
+      if (mention) {
+        events.push({
+          instagramAccountId: accountId,
+          messageId,
+          senderId,
+          kind: "story_mention",
+        });
+      }
     }
   }
 

@@ -226,3 +226,25 @@ export function matchKeywords(
 
   return { matched: false, matchedKeyword: null };
 }
+
+/**
+ * Match one inbound trigger (DM or story event) against a campaign's keyword
+ * configuration. A campaign with `matchAnyWord` fires on any trigger text —
+ * and is the only kind that can fire when the trigger carries no text at all
+ * (a story mention), since there is nothing to match keywords against.
+ */
+export function matchInboundTrigger(input: {
+  text: string | null | undefined;
+  keywords: string[];
+  matchAnyWord: boolean;
+  wholeWordMatch: boolean;
+}): KeywordMatchResult {
+  if (input.matchAnyWord) {
+    return { matched: true, matchedKeyword: null };
+  }
+  const text = input.text?.trim();
+  if (!text) {
+    return { matched: false, matchedKeyword: null };
+  }
+  return matchKeywords(text, input.keywords, input.wholeWordMatch);
+}

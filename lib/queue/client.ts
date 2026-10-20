@@ -77,6 +77,21 @@ export interface ProcessMessageJob {
   senderId: string;
 }
 
+// A story interaction: a reply to the account's story, or a mention of the
+// account in someone else's story. Campaigns with `storyTriggerEnabled`
+// reply to the sender. A mention carries no text, so `messageText` is
+// absent there and only matchAnyWord campaigns can fire.
+export interface ProcessStoryJob {
+  accountConnectionId?: string;
+  instagramAccountId: string;
+  /** The webhook message id of the story interaction (dedupe key). */
+  messageId: string;
+  kind: "story_reply" | "story_mention";
+  messageText?: string;
+  senderId: string;
+  storyId?: string;
+}
+
 // A DM broadcast to a contact segment. The job carries only the broadcast
 // id; the recipients live in BroadcastDelivery rows, so a retried job
 // resumes from the still-PENDING rows instead of resending to everyone.
@@ -89,11 +104,13 @@ export type DmQueueJob =
   | ProcessPostbackJob
   | ProcessFollowUpJob
   | ProcessMessageJob
+  | ProcessStoryJob
   | ProcessBroadcastJob;
 
 export const POSTBACK_JOB_NAME = "process-postback";
 export const FOLLOWUP_JOB_NAME = "process-followup";
 export const MESSAGE_JOB_NAME = "process-message";
+export const STORY_JOB_NAME = "process-story";
 export const BROADCAST_JOB_NAME = "process-broadcast";
 
 let dmQueue: Queue<DmQueueJob> | null = null;

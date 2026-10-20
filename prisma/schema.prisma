@@ -191,6 +191,11 @@ model Automation {
   // keywords above. Independent of the post trigger — a DM has no media, so
   // postId / matchAnyPost do not apply to it.
   dmTriggerEnabled Boolean @default(false)
+  // Also fire this campaign when someone replies to the account's story or
+  // mentions the account in theirs. Independent of the post and DM triggers:
+  // a story reply's text is keyword-matched like a DM, while a mention has
+  // no text and can only fire matchAnyWord campaigns.
+  storyTriggerEnabled Boolean @default(false)
   dmMessage      String
   openingDmEnabled     Boolean @default(false)
   openingDmMessage     String?
@@ -314,6 +319,9 @@ model InboxMessage {
   /// The webhook's message id. Unique so a redelivered webhook never
   /// archives the same DM twice.
   externalMessageId String          @unique
+  /// How this message arrived: "DM" for a plain direct message,
+  /// "STORY_REPLY" / "STORY_MENTION" when it came in through a story.
+  source            String          @default("DM")
   receivedAt        DateTime        @default(now())
   status            InboxMessageStatus @default(PENDING)
   /// The reply an agent sent via MCP (send_dm_reply), when it replied to

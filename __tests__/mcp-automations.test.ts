@@ -107,6 +107,7 @@ describe("MCP automations server", () => {
     expect(create.inputSchema.properties).toHaveProperty("name");
     expect(create.inputSchema.properties).toHaveProperty("dmMessage");
     expect(create.inputSchema.properties).toHaveProperty("keywords");
+    expect(create.inputSchema.properties).toHaveProperty("storyTriggerEnabled");
     expect(create.inputSchema.required).toContain("name");
     expect(create.inputSchema.required).toContain("dmMessage");
 
@@ -116,6 +117,7 @@ describe("MCP automations server", () => {
     );
     expect(update.inputSchema.properties).toHaveProperty("id");
     expect(update.inputSchema.properties).toHaveProperty("isActive");
+    expect(update.inputSchema.properties).toHaveProperty("storyTriggerEnabled");
   });
 
   it("rejects invalid create_automation input via shared schema refinements", async () => {
