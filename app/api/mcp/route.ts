@@ -387,6 +387,97 @@ export function buildServer(ctx: WorkspaceContext) {
     }
   );
 
+  server.registerTool(
+    "list_contacts",
+    {
+      description:
+        "List CRM contacts (people who commented or DM'd) in this workspace, most recently seen first. Optionally filter by tag.",
+      inputSchema: {
+        tag: z
+          .string()
+          .optional()
+          .describe("Only contacts carrying this tag"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Max contacts to return (default 50)"),
+      },
+    },
+    async ({ tag, limit }) => {
+      const contacts = await prisma.contact.findMany({
+        where: { workspaceId, ...(tag ? { tags: { has: tag } } : {}) },
+        select: {
+          id: true,
+          igUserId: true,
+          username: true,
+          displayName: true,
+          tags: true,
+          firstSeenAt: true,
+          lastSeenAt: true,
+          sourceAutomationId: true,
+          instagramAccount: { select: { username: true } },
+          sourceAutomation: { select: { name: true } },
+        },
+        orderBy: { lastSeenAt: "desc" },
+        take: limit ?? 50,
+      });
+      return ok({ contacts });
+    }
+  );
+
+  server.registerTool(
+    "get_contact",
+    {
+      description:
+        "Get a single CRM contact by contact ID or Instagram user ID, plus a summary of its DM interactions.",
+      inputSchema: {
+        id: z.string().optional().describe("Contact ID"),
+        igUserId: z
+          .string()
+          .optional()
+          .describe("Instagram user ID (IGSID) of the contact"),
+      },
+    },
+    async ({ id, igUserId }) => {
+      if (!id && !igUserId) {
+        return fail("Provide either id or igUserId");
+      }
+      const contact = await prisma.contact.findFirst({
+        where: { workspaceId, ...(id ? { id } : { igUserId }) },
+        include: {
+          instagramAccount: { select: { username: true } },
+          sourceAutomation: { select: { name: true } },
+        },
+      });
+      if (!contact) return fail("Contact not found");
+
+      const statusRows = await prisma.dmLog.groupBy({
+        by: ["status"],
+        where: {
+          workspaceId,
+          instagramAccountId: contact.instagramAccountId,
+          commenterId: contact.igUserId,
+        },
+        _count: { _all: true },
+      });
+      const byStatus = Object.fromEntries(
+        statusRows.map((r) => [r.status, r._count._all])
+      );
+      const totalInteractions = statusRows.reduce(
+        (sum, r) => sum + r._count._all,
+        0
+      );
+
+      return ok({
+        contact,
+        interactions: { total: totalInteractions, byStatus },
+      });
+    }
+  );
+
   return server;
 }
 

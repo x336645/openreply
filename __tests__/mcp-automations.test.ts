@@ -42,7 +42,7 @@ async function rpc(transport: WebStandardStreamableHTTPServerTransport, body: un
 }
 
 describe("MCP automations server", () => {
-  it("initializes and lists 6 tools with JSON input schemas", async () => {
+  it("initializes and lists 8 tools with JSON input schemas", async () => {
     const server = buildServer(fakeCtx);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -80,7 +80,9 @@ describe("MCP automations server", () => {
       "create_automation",
       "delete_automation",
       "get_automation",
+      "get_contact",
       "list_automations",
+      "list_contacts",
       "update_automation",
     ]);
 

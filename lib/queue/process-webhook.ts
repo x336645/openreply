@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/client';
+import { captureContact } from '@/lib/crm/contacts';
 import { getDMQueue, MESSAGE_JOB_NAME, POSTBACK_JOB_NAME } from '@/lib/queue/client';
 import { parseCommentEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents } from '@/lib/meta/webhook';
 import { Prisma, type InstagramProvider } from '@/app/generated/prisma/client';
@@ -57,6 +58,15 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
           jobId: `comment_${event.instagramAccountId}_${event.commentId}`,
         }
       );
+
+      // CRM: record the commenter. Which campaign (if any) matches is only
+      // known in the worker, which backfills sourceAutomationId there.
+      await captureContact({
+        workspaceId: account.workspaceId,
+        instagramAccountId: account.id,
+        igUserId: event.commenterId,
+        username: event.commenterName,
+      });
 
       if (account) {
         await prisma.webhookEvent.update({
@@ -119,6 +129,14 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
           ).toString("base64url")}`,
         }
       );
+
+      // CRM: record the sender. Message webhooks carry no username; the
+      // worker backfills identity/source when a campaign matches.
+      await captureContact({
+        workspaceId: account.workspaceId,
+        instagramAccountId: account.id,
+        igUserId: event.senderId,
+      });
 
       if (account) {
         await prisma.webhookEvent.update({

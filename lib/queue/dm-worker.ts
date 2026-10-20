@@ -20,6 +20,7 @@ import {
   type ProcessFollowUpJob,
 } from "./client";
 import { prisma } from "@/lib/db/client";
+import { captureContact } from "@/lib/crm/contacts";
 import {
   MetaApiError,
   RateLimitError,
@@ -333,6 +334,16 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     if (!matchResult.matched) {
       continue;
     }
+
+    // CRM: this comment triggered a campaign — record the contact with its
+    // first-touch source. Best-effort; never blocks the send flow.
+    await captureContact({
+      workspaceId: automation.workspaceId,
+      instagramAccountId: automation.instagramAccountId,
+      igUserId: commenterId,
+      username: commenterName,
+      sourceAutomationId: automation.id,
+    });
 
     const existingLog = await prisma.dmLog.findUnique({
       where: {
@@ -1309,6 +1320,15 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         );
 
     if (!matchResult.matched) continue;
+
+    // CRM: this DM triggered a campaign — record the contact with its
+    // first-touch source. Best-effort; never blocks the send flow.
+    await captureContact({
+      workspaceId: automation.workspaceId,
+      instagramAccountId: automation.instagramAccountId,
+      igUserId: senderId,
+      sourceAutomationId: automation.id,
+    });
 
     const existingLog = await prisma.dmLog.findUnique({
       where: {

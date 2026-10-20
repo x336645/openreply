@@ -81,6 +81,7 @@ model Workspace {
   instagramAccounts InstagramAccount[]
   automations       Automation[]
   dmLogs            DmLog[]
+  contacts          Contact[]
   trackedLinks      TrackedLink[]
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
@@ -142,6 +143,7 @@ model InstagramAccount {
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   automations Automation[]
   dmLogs      DmLog[]
+  contacts    Contact[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
 
@@ -214,6 +216,7 @@ model Automation {
   dmLogs           DmLog[]
   trackedLinks     TrackedLink[]
   linkClicks       LinkClick[]
+  sourcedContacts  Contact[]        @relation("ContactSourceAutomation")
 
   @@index([workspaceId])
   @@index([instagramAccountId])
@@ -256,6 +259,37 @@ model DmLog {
   @@index([automationId])
   @@index([instagramAccountId])
   @@index([status])
+}
+
+/// One row per Instagram user who interacted with an account (comment trigger
+/// or DM), captured automatically from the webhook flow. The CRM foundation:
+/// tags/notes are managed by the workspace; sourceAutomationId records which
+/// campaign first brought the person in and is never overwritten afterwards.
+model Contact {
+  id                 String   @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String
+
+  /// The other party's Instagram user id (IGSID), unique per account.
+  igUserId           String
+  username           String?
+  displayName        String?
+  firstSeenAt        DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+  sourceAutomationId String?
+  tags               String[] @default([])
+  notes              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  sourceAutomation Automation?      @relation("ContactSourceAutomation", fields: [sourceAutomationId], references: [id], onDelete: SetNull)
+
+  @@unique([instagramAccountId, igUserId])
+  @@index([workspaceId])
+  @@index([workspaceId, lastSeenAt])
 }
 
 // Legacy reconciliation model; currently unwired. Runtime code does not read
